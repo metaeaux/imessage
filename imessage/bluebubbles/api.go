@@ -1109,7 +1109,6 @@ func (bb *blueBubbles) SendMessage(chatID, text string, replyTo string, replyToP
 		TempGUID:            fmt.Sprintf("temp-%s", RandString(8)),
 		SelectedMessageGUID: replyTo,
 		PartIndex:           replyToPart,
-		DDScan:              bb.usingPrivateAPI,
 	}
 
 	var res SendTextResponse
@@ -1720,85 +1719,31 @@ func (bb *blueBubbles) convertBBMessageToiMessage(bbMessage Message) (*imessage.
 		}
 		reader = resp.Body
 
-		// Fetch the data ourselves because the payloadData object is raw from the iMessage DB, from BB.
-		// That would require a ton of parsing that the BB app does client side to become something useable but it's written in Dart
-		// See https://github.com/BlueBubblesApp/bluebubbles-app/blob/d0257c9080e82140602340b48f85fa148721553c/lib/models/global/payload_data.dart
 		og := opengraph.NewOpenGraph()
 		if err := og.ProcessHTML(reader); err != nil {
 			bb.bridge.GetLog().Errorfln("Error processing html: %v", err)
 			return &message, nil
 		}
 
-		// Was there any OpenGraph tags? Sometimes ddScan is able to produce data without them
-		// But this is the compromise for not wanting to parse payloadData
-		if og != nil && og.SiteName != "" {
-			message.RichLink = &imessage.RichLink{}
-			message.RichLink.OriginalURL = og.URL
-			message.RichLink.URL = og.URL
-			message.RichLink.SiteName = og.SiteName
-			message.RichLink.Title = og.Title
+		if og != nil && og.Title != "" {
 			if og.Description != "" {
-				message.RichLink.Summary = og.Description
+				message.Text = fmt.Sprintf("<p><strong>%s</strong></p><blockquote>%s</blockquote><p>%s</p>", og.Title, og.Description, og.URL)
 			} else {
-				message.RichLink.Summary = og.URL
+				message.Text = fmt.Sprintf("<p><strong>%s</strong></p><p>%s</p>", og.Title, og.URL)
 			}
-			if og.Profile != nil {
-				message.RichLink.Creator = og.Profile.Username
+			// TODO: Profile is used for instagram/social media links
+			// if og.Profile != nil {
+			// 	message.RichLink.Creator = og.Profile.Username
+			// }
+
+			if len(message.Attachments) > 1 && message.Attachments[1] != nil {
+				image := message.Attachments[1]
+				message.Attachments = make([]*imessage.Attachment, 1)
+				message.Attachments[0] = image
 			}
 
-			// It's always assumed that the first attachment is the icon, the second is the banenr image
-			var icon []byte
-			var err error
-			if len(message.Attachments) > 0 && message.Attachments[0] != nil {
-				icon, err = message.Attachments[0].Read()
-			}
-			if err == nil {
-				message.RichLink.Icon = &imessage.RichLinkAsset{}
-				// Don't add URLs, if the icon is empty then it wil attempt to fetch the icon with the URL
-				// The library used also doesn't provide anything for an icon
-				//message.RichLink.Icon.OriginalURL = og.URL + "/favicon.ico"
-				message.RichLink.Icon.Source = &imessage.RichLinkAssetSource{}
-				message.RichLink.Icon.Source.Data = icon
-				//message.RichLink.Icon.Source.URL = og.URL + "/favicon.ico"
-			}
-
-			if len(og.Images) > 0 {
-				message.RichLink.Image = &imessage.RichLinkAsset{}
-				message.RichLink.Image.OriginalURL = og.Images[0].URL
-				var image []byte
-				var err error
-				if len(message.Attachments) > 1 && message.Attachments[1] != nil {
-					image, err = message.Attachments[1].Read()
-				}
-				if err == nil && image != nil {
-					message.RichLink.Image.Source = &imessage.RichLinkAssetSource{}
-					message.RichLink.Image.Source.URL = og.Images[0].URL
-					message.RichLink.Image.Source.Data = image
-				}
-				message.RichLink.Image.MimeType = og.Images[0].Type
-				message.RichLink.Image.Size = &imessage.RichLinkAssetSize{}
-				message.RichLink.Image.Size.Height = float64(og.Images[0].Height)
-				message.RichLink.Image.Size.Width = float64(og.Images[0].Width)
-			}
-
-			if len(og.Videos) > 0 {
-				message.RichLink.Video = &imessage.RichLinkVideoAsset{}
-				message.RichLink.Video.StreamingURL = og.Videos[0].URL
-				message.RichLink.Video.YouTubeURL = og.Videos[0].URL
-				message.RichLink.Video.Asset.OriginalURL = og.Videos[0].URL
-				message.RichLink.Video.Asset.Source = &imessage.RichLinkAssetSource{}
-				message.RichLink.Video.Asset.Source.URL = og.Videos[0].URL
-				message.RichLink.Video.Asset.MimeType = og.Videos[0].Type
-				message.RichLink.Video.Asset.Size = &imessage.RichLinkAssetSize{}
-				message.RichLink.Video.Asset.Size.Height = float64(og.Videos[0].Height)
-				message.RichLink.Video.Asset.Size.Width = float64(og.Videos[0].Width)
-			}
 		}
 		resp.Body.Close()
-
-		// Remove the attachments iMessage sent to display the link
-		// We want to remove them even if we don't have OpenGraph data because ddScan probably sent attachments
-		message.Attachments = make([]*imessage.Attachment, 0)
 	}
 
 	return &message, nil
@@ -2008,7 +1953,7 @@ func (bb *blueBubbles) Capabilities() imessage.ConnectorCapabilities {
 		MessageStatusCheckpoints: false,
 		DeliveredStatus:          bb.usingPrivateAPI,
 		ContactChatMerging:       false,
-		RichLinks:                bb.usingPrivateAPI,
+		RichLinks:                false,
 		ChatBridgeResult:         false,
 	}
 }
