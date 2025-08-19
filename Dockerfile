@@ -4,7 +4,7 @@ RUN apk add --no-cache git ca-certificates build-base su-exec olm-dev
 
 WORKDIR /build
 COPY . /build
-RUN ./build.sh
+RUN sh /build/build.sh
 
 FROM alpine:3.22
 
